@@ -1,10 +1,16 @@
 import logging
 import os
 from abc import abstractmethod
+import json
+from bert_score import score
+from transformers import RobertaModel, RobertaTokenizer
+import numpy as np
+from bert_score import score
 
 import torch
 from numpy import inf
-
+import wandb
+#wandb.login()
 
 class BaseTrainer(object):
     def __init__(self, model, criterion, metric_ftns, optimizer, args, lr_scheduler):
@@ -48,14 +54,32 @@ class BaseTrainer(object):
         if args.resume is not None:
             self._resume_checkpoint(args.resume)
 
+        # start a new wandb run:
+        wandb.init(
+            # set the wandb project where this run will be logged
+            project="R2GenCMN",
+
+            # track hyperparameters and run metadata
+            config={
+                "model": model,
+                "criterion": criterion,
+                "dataset": args.dataset_name,
+                "metric_ftns": metric_ftns,
+                "optimizer": optimizer,
+                "scheduler": lr_scheduler,
+                "epochs": self.args.epochs,
+            }
+        )
+
+
     @abstractmethod
     def _train_epoch(self, epoch):
         raise NotImplementedError
 
     def train(self):
         not_improved_count = 0
-        for epoch in range(self.start_epoch, self.epochs + 1):
-            result = self._train_epoch(epoch)
+        for epoch in range(self.start_epoch, self.start_epoch+self.epochs + 1):
+            result,test_res,test_gts= self._train_epoch(epoch)
 
             # save logged informations into log dict
             log = {'epoch': epoch}
@@ -91,9 +115,9 @@ class BaseTrainer(object):
                     self.logger.info("Validation performance didn\'t improve for {} epochs. " "Training stops.".format(
                         self.early_stop))
                     break
-
+            ## if best model saved, save also output and GT
             if epoch % self.save_period == 0:
-                self._save_checkpoint(epoch, save_best=best)
+                self._save_checkpoint(epoch, test_res,test_gts, save_best=best)
 
     def _record_best(self, log):
         improved_val = (self.mnt_mode == 'min' and log[self.mnt_metric] <= self.best_recorder['val'][
@@ -133,19 +157,30 @@ class BaseTrainer(object):
         list_ids = list(range(n_gpu_use))
         return device, list_ids
 
-    def _save_checkpoint(self, epoch, save_best=False):
+    def _save_checkpoint(self, epoch, test_res,test_gts, save_best=False):
         state = {
             'epoch': epoch,
             'state_dict': self.model.state_dict(),
             'optimizer': self.optimizer.state_dict(),
             'monitor_best': self.mnt_best
-        }
-        filename = os.path.join(self.checkpoint_dir, 'current_checkpoint.pth')
+            }
+
+        ## save results to file:
+        results = {i:[test_gts[i],test_res[i]] for i in range(len(test_gts))}
+        
+        filename = os.path.join(self.checkpoint_dir, f'current_checkpoint_{self.args.run_name}.pth')
         torch.save(state, filename)
         self.logger.info("Saving checkpoint: {} ...".format(filename))
+        current_results_path = os.path.join(self.checkpoint_dir, f'model_current_results_{self.args.run_name}.json')
+        with open(current_results_path, "w") as outfile:
+            json.dump(results, outfile)
         if save_best:
-            best_path = os.path.join(self.checkpoint_dir, 'model_best.pth')
+            best_path = os.path.join(self.checkpoint_dir, f'model_best_{self.args.run_name}.pth')
+            best_results_path = os.path.join(self.checkpoint_dir, f'model_best_results_{self.args.run_name}.json')
             torch.save(state, best_path)
+            with open(best_results_path, "w") as outfile:
+                json.dump(results, outfile)
+            # torch.save(results, best_results_path)
             self.logger.info("Saving current best: model_best.pth ...")
 
     def _resume_checkpoint(self, resume_path):
@@ -162,23 +197,73 @@ class BaseTrainer(object):
 
 class Trainer(BaseTrainer):
     def __init__(self, model, criterion, metric_ftns, optimizer, args, lr_scheduler, train_dataloader,
-                 val_dataloader, test_dataloader):
+                 val_dataloader, test_dataloader, tokenizer):
         super(Trainer, self).__init__(model, criterion, metric_ftns, optimizer, args, lr_scheduler)
         self.train_dataloader = train_dataloader
         self.val_dataloader = val_dataloader
         self.test_dataloader = test_dataloader
+        self.tokenizer = tokenizer
+
+        # Load pre-trained RoBERTa model
+        self.roberta_model = RobertaModel.from_pretrained('roberta-large').to(self.device)
+        self.roberta_model.eval()  # Set to evaluation mode
+        # Freeze RoBERTa parameters
+        for param in self.roberta_model.parameters():
+            param.requires_grad = False
 
     def _train_epoch(self, epoch):
 
         self.logger.info('[{}/{}] Start to train in the training set.'.format(epoch, self.epochs))
         train_loss = 0
         self.model.train()
+        val_gts, val_res = [], []
         for batch_idx, (images_id, images, reports_ids, reports_masks) in enumerate(self.train_dataloader):
 
             images, reports_ids, reports_masks = images.to(self.device), reports_ids.to(self.device), \
                                                  reports_masks.to(self.device)
-            output = self.model(images, reports_ids, mode='train')
-            loss = self.criterion(output, reports_ids, reports_masks)
+            output = self.model(images, reports_ids, mode='train') ## take last word of word dimension (history)
+            if epoch > 0:
+                ## bert_loss:
+                E = self.tokenizer.model.embeddings.word_embeddings.weight.to("cuda")
+                p_i_j = torch.exp(output[:,:,1:])
+                gt_embedding_batch = E[reports_ids.to("cuda").int()][:,1:] ########## ask Elad
+                weighted_embedding_batch = torch.matmul(p_i_j.to("cuda"), E.to("cuda")) ## maybe change here to deal with batch
+                self.model.eval()
+                # Compute BERTScore:
+                # Get contextualized embeddings from RoBERTa
+                reports_masks = reports_masks[:,1:]
+                pred_outputs = self.roberta_model(inputs_embeds=weighted_embedding_batch,
+                                                  attention_mask=reports_masks)
+                gt_outputs = self.roberta_model(inputs_embeds=gt_embedding_batch, attention_mask=reports_masks)
+
+                # Get last hidden states [batch_size, seq_len, hidden_dim]
+                pred_hidden_states = pred_outputs.last_hidden_state
+                gt_hidden_states = gt_outputs.last_hidden_state
+
+                # Apply mask to zero out padding positions [batch_size, seq_len, 1]
+                reports_masks_expanded = reports_masks.unsqueeze(-1).float()
+                pred_hidden_states = pred_hidden_states * reports_masks_expanded
+                gt_hidden_states = gt_hidden_states * reports_masks_expanded
+
+                # Compute mean embeddings for each sequence
+                pred_sum = pred_hidden_states.sum(dim=1)  # [batch_size, hidden_dim]
+                gt_sum = gt_hidden_states.sum(dim=1)  # [batch_size, hidden_dim]
+
+                lengths = reports_masks.sum(dim=1).unsqueeze(-1)  # [batch_size, 1]
+
+                pred_mean = pred_sum / lengths
+                gt_mean = gt_sum / lengths
+
+                # Compute cosine similarity between mean embeddings
+                cos = torch.nn.CosineSimilarity(dim=-1)
+                cos_sim = cos(pred_mean, gt_mean)  # [batch_size]
+
+                # Compute loss as 1 - cosine similarity (BERT-based semantic loss)
+                bert_loss = 1 - cos_sim  # [batch_size]
+                loss = bert_loss.mean()  # Scalar
+
+            else:
+                loss = self.criterion(output, reports_ids, reports_masks)
             train_loss += loss.item()
             self.optimizer.zero_grad()
             loss.backward()
@@ -187,6 +272,7 @@ class Trainer(BaseTrainer):
                 self.logger.info('[{}/{}] Step: {}/{}, Training Loss: {:.5f}.'
                                  .format(epoch, self.epochs, batch_idx, len(self.train_dataloader),
                                          train_loss / (batch_idx + 1)))
+                wandb.log({'epoch': epoch + 1, 'train_loss': train_loss / (batch_idx + 1)})
 
         log = {'train_loss': train_loss / len(self.train_dataloader)}
 
@@ -206,6 +292,7 @@ class Trainer(BaseTrainer):
 
             val_met = self.metric_ftns({i: [gt] for i, gt in enumerate(val_gts)},
                                        {i: [re] for i, re in enumerate(val_res)})
+            wandb.log({'val_' + k: v for k, v in val_met.items()})
             log.update(**{'val_' + k: v for k, v in val_met.items()})
 
         self.logger.info('[{}/{}] Start to evaluate in the test set.'.format(epoch, self.epochs))
@@ -223,8 +310,9 @@ class Trainer(BaseTrainer):
 
             test_met = self.metric_ftns({i: [gt] for i, gt in enumerate(test_gts)},
                                         {i: [re] for i, re in enumerate(test_res)})
+            wandb.log({'test_' + k: v for k, v in test_met.items()})
             log.update(**{'test_' + k: v for k, v in test_met.items()})
 
         self.lr_scheduler.step()
 
-        return log
+        return log,test_res,test_gts

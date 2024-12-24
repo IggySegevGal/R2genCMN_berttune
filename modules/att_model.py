@@ -38,7 +38,7 @@ class AttModel(CaptionModel):
         super(AttModel, self).__init__()
         self.args = args
         self.tokenizer = tokenizer
-        self.vocab_size = len(tokenizer.idx2token)
+        self.vocab_size = tokenizer.get_vocab_size()
         self.input_encoding_size = args.d_model
         self.rnn_size = args.d_ff
         self.num_layers = args.num_layers

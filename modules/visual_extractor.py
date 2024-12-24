@@ -1,14 +1,17 @@
 import torch
 import torch.nn as nn
 import torchvision.models as models
-
+from torchvision.models import ResNet101_Weights
 
 class VisualExtractor(nn.Module):
     def __init__(self, args):
         super(VisualExtractor, self).__init__()
         self.visual_extractor = args.visual_extractor
         self.pretrained = args.visual_extractor_pretrained
-        model = getattr(models, self.visual_extractor)(pretrained=self.pretrained)
+        if self.pretrained:
+            model = getattr(models, self.visual_extractor)(weights=ResNet101_Weights.IMAGENET1K_V2)
+        else:
+            model = getattr(models, self.visual_extractor)(weights=False)
         modules = list(model.children())[:-2]
         self.model = nn.Sequential(*modules)
         self.avg_fnt = torch.nn.AvgPool2d(kernel_size=7, stride=1, padding=0)

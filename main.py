@@ -1,5 +1,5 @@
 import argparse
-
+import json
 import numpy as np
 import torch
 
@@ -10,8 +10,15 @@ from modules.metrics import compute_scores
 from modules.optimizers import build_optimizer, build_lr_scheduler
 from modules.tokenizers import Tokenizer
 from modules.trainer import Trainer
+from bert_score import score
 
+import torch
+from transformers import RobertaModel, RobertaTokenizer
+normal_repr = torch.Tensor.__repr__
+torch.Tensor.__repr__ = lambda self: f"{self.shape}_{normal_repr(self)}"
+from transformers import BertModel, BertTokenizer
 
+from bert_score import BERTScorer
 def parse_agrs():
     parser = argparse.ArgumentParser()
 
@@ -27,7 +34,7 @@ def parse_agrs():
     parser.add_argument('--max_seq_length', type=int, default=60, help='the maximum sequence length of the reports.')
     parser.add_argument('--threshold', type=int, default=3, help='the cut off frequency for the words.')
     parser.add_argument('--num_workers', type=int, default=2, help='the number of workers for dataloader.')
-    parser.add_argument('--batch_size', type=int, default=16, help='the number of samples for a batch')
+    parser.add_argument('--batch_size', type=int, default=4, help='the number of samples for a batch')
 
     # Model settings (for visual extractor)
     parser.add_argument('--visual_extractor', type=str, default='resnet101', help='the visual extractor to be used.')
@@ -64,7 +71,7 @@ def parse_agrs():
 
     # Trainer settings
     parser.add_argument('--n_gpu', type=int, default=1, help='the number of gpus to be used.')
-    parser.add_argument('--epochs', type=int, default=100, help='the number of training epochs.')
+    parser.add_argument('--epochs', type=int, default=2, help='the number of training epochs.')
     parser.add_argument('--save_dir', type=str, default='results/iu_xray', help='the patch to save the models.')
     parser.add_argument('--record_dir', type=str, default='records/', help='the patch to save the results of experiments.')
     parser.add_argument('--log_period', type=int, default=1000, help='the logging interval (in batches).')
@@ -91,13 +98,34 @@ def parse_agrs():
 
     # Others
     parser.add_argument('--seed', type=int, default=9233, help='.')
-    parser.add_argument('--resume', type=str, help='whether to resume the training from existing checkpoints.')
+    parser.add_argument('--resume', type=str, default="/home/shaniiggy/R2GenCMN/results/iu_xray/current_checkpoint.pth", help='whether to resume the training from existing checkpoints.')
+    parser.add_argument('--run_name', type=str, default='', help='The run name containing details for checkpoint and results saving')
 
     args = parser.parse_args()
+
     return args
 
 
 def main():
+
+    ## use bert score to score train outputs:
+    # refs = []
+    # cands = []
+    # with open("/home/shaniiggy/R2GenCMN/results/mimic_cxr/model_current_results.json", "r") as ref2:
+    #     dict = json.load(ref2)
+    # for value in dict.values():
+    #     refs.append([value[0]])
+    #     cands.append(value[1])
+    # current_bert = score(cands, refs,lang="en",rescale_with_baseline=True, inputs_embeds=None)
+    # print(current_bert)
+    # with open("/home/shaniiggy/R2GenCMN/results/mimic_cxr/model_best_results.json", "r") as ref2:
+    #     dict = json.load(ref2)
+    # for value in dict.values():
+    #     refs.append([value[0]])
+    #     cands.append(value[1])
+    # best_bert = score(cands, refs, lang="en", rescale_with_baseline=True)
+    # print(best_bert)
+
     # parse arguments
     args = parse_agrs()
 
@@ -109,6 +137,22 @@ def main():
 
     # create tokenizer
     tokenizer = Tokenizer(args)
+
+    ## replace tokenizer with BERT tokenizer:
+    # Load pre-trained model and tokenizer
+    # model_name = 'roberta-large' #'dmis-lab/biobert-base-cased-v1.1' #'roberta-large' #
+    # tokenizer = RobertaTokenizer.from_pretrained(model_name)
+    # model = RobertaModel.from_pretrained(model_name)
+    #
+    # # Access the embedding matrix
+    # embedding_matrix = model.embeddings.word_embeddings.weight
+    #
+    # # Example token
+    # token = 'quick'
+    # token_id = tokenizer.convert_tokens_to_ids(token)
+    #
+    # # Retrieve the embedding for the token
+    # token_embedding = embedding_matrix[token_id]
 
     # create data loader
     train_dataloader = R2DataLoader(args, tokenizer, split='train', shuffle=True)
@@ -127,8 +171,9 @@ def main():
     lr_scheduler = build_lr_scheduler(args, optimizer)
 
     # build trainer and start to train
-    trainer = Trainer(model, criterion, metrics, optimizer, args, lr_scheduler, train_dataloader, val_dataloader, test_dataloader)
+    trainer = Trainer(model, criterion, metrics, optimizer, args, lr_scheduler, train_dataloader, val_dataloader, test_dataloader, tokenizer)
     trainer.train()
+
 
 
 if __name__ == '__main__':

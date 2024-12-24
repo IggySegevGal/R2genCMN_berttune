@@ -1,17 +1,18 @@
 from sklearn.metrics import roc_auc_score, f1_score, recall_score, precision_score
 
 from pycocoevalcap.bleu.bleu import Bleu
-from pycocoevalcap.meteor import Meteor
-from pycocoevalcap.rouge import Rouge
+from pycocoevalcap.meteor.meteor import Meteor
+from pycocoevalcap.rouge.rouge import Rouge
+from bert_score import score as bert_score
 
 
 def compute_scores(gts, res):
     """
-    Performs the MS COCO evaluation using the Python 3 implementation (https://github.com/salaniz/pycocoevalcap)
+    Performs the evaluation using various metrics, including BLEU, METEOR, ROUGE_L, and BERTScore.
 
     :param gts: Dictionary with the image ids and their gold captions,
-    :param res: Dictionary with the image ids ant their generated captions
-    :print: Evaluation score (the mean of the scores of all the instances) for each measure
+    :param res: Dictionary with the image ids and their generated captions
+    :return: Evaluation scores for each metric
     """
 
     # Set up scorers
@@ -32,8 +33,19 @@ def compute_scores(gts, res):
                 eval_res[m] = sc
         else:
             eval_res[method] = score
-    return eval_res
 
+    # Compute BERTScore
+    # Extract candidates and references
+    ids = sorted(res.keys())
+    candidates = [res[id][0] for id in ids]    # res[id] is a list with one generated caption
+    references = [gts[id] for id in ids]       # gts[id] is a list of reference captions
+
+    # Compute BERTScore
+    P, R, F1 = bert_score(candidates, references, lang="en", verbose=False)
+    bert_score_avg = F1.mean().item()
+    eval_res['BERT_SCORE'] = bert_score_avg
+
+    return eval_res
 
 def compute_mlc(gt, pred, label_set):
     res_mlc = {}

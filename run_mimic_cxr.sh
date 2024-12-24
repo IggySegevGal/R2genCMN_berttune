@@ -1,11 +1,11 @@
-python main.py \
-    --image_dir data/mimic_cxr/images/ \
+python3.10 main.py \
+    --image_dir data/mimic_cxr/MIMIC256/ \
     --ann_path data/mimic_cxr/annotation.json \
     --dataset_name mimic_cxr \
     --max_seq_length 100 \
     --threshold 10 \
     --epochs 30 \
-    --batch_size 16 \
+    --batch_size 7 \
     --lr_ve 1e-4 \
     --lr_ed 5e-4 \
     --step_size 3 \
