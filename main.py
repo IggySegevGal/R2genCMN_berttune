@@ -98,8 +98,10 @@ def parse_agrs():
 
     # Others
     parser.add_argument('--seed', type=int, default=9233, help='.')
-    parser.add_argument('--resume', type=str, default="/home/shaniiggy/R2GenCMN/results/iu_xray/current_checkpoint.pth", help='whether to resume the training from existing checkpoints.')
-    parser.add_argument('--run_name', type=str, default='', help='The run name containing details for checkpoint and results saving')
+    parser.add_argument('--resume', type=str, help='whether to resume the training from existing checkpoints.')
+
+    # parser.add_argument('--resume', type=str, default="/home/shaniiggy/R2GenCMN/results/iu_xray/current_checkpoint_.pth", help='whether to resume the training from existing checkpoints.')
+    parser.add_argument('--run_name', type=str, default='original_tokenizer', help='The run name containing details for checkpoint and results saving')
 
     args = parser.parse_args()
 
@@ -171,7 +173,8 @@ def main():
     lr_scheduler = build_lr_scheduler(args, optimizer)
 
     # build trainer and start to train
-    trainer = Trainer(model, criterion, metrics, optimizer, args, lr_scheduler, train_dataloader, val_dataloader, test_dataloader, tokenizer)
+    #trainer = Trainer(model, criterion, metrics, optimizer, args, lr_scheduler, train_dataloader, val_dataloader, test_dataloader, tokenizer)
+    trainer = Trainer(model, criterion, metrics, optimizer, args, lr_scheduler, train_dataloader, val_dataloader, test_dataloader)
     trainer.train()
 
 

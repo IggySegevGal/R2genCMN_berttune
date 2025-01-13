@@ -38,7 +38,7 @@ def compute_scores(gts, res):
     # Extract candidates and references
     ids = sorted(res.keys())
     candidates = [res[id][0] for id in ids]    # res[id] is a list with one generated caption
-    references = [gts[id] for id in ids]       # gts[id] is a list of reference captions
+    references = [gts[id][0] for id in ids]       # gts[id] is a list of reference captions
 
     # Compute BERTScore
     P, R, F1 = bert_score(candidates, references, lang="en", verbose=False)

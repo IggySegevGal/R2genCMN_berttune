@@ -4,8 +4,8 @@ python3 main.py \
     --dataset_name iu_xray \
     --max_seq_length 60 \
     --threshold 3 \
-    --epochs 100 \
-    --batch_size 4 \
+    --epochs 300 \
+    --batch_size 8 \
     --lr_ve 1e-4 \
     --lr_ed 5e-4 \
     --step_size 10 \
@@ -18,3 +18,4 @@ python3 main.py \
     --beam_size 3 \
     --save_dir results/iu_xray/ \
     --log_period 50
+    --run_name "original_tokenizer"
